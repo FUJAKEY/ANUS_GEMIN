@@ -7,6 +7,7 @@ import logging
 
 from anus.models.base.base_model import BaseModel
 from anus.models.openai_model import OpenAIModel
+from anus.models.gemini_model import GeminiModel  # Импорт нового класса модели
 
 class ModelRouter:
     """
@@ -26,9 +27,12 @@ class ModelRouter:
             default_model_config: Configuration for the default model.
         """
         self.models: Dict[str, BaseModel] = {}
+        # Регистрация классов моделей для разных провайдеров
         self.model_classes: Dict[str, Type[BaseModel]] = {
-            "openai": OpenAIModel
+            "openai": OpenAIModel,
+            "gemini": GeminiModel
         }
+        # Если конфигурация по умолчанию не передана, используем openai
         self.default_model_config = default_model_config or {
             "provider": "openai",
             "model_name": "gpt-4",
@@ -68,21 +72,18 @@ class ModelRouter:
         Returns:
             A model instance.
         """
-        # If it's a string, look up by name
+        # Если передана строка, ищем по имени
         if isinstance(name_or_config, str):
-            # Check registered models
             if name_or_config in self.models:
                 return self.models[name_or_config]
-            
-            # If not found, use default model
             logging.warning(f"Model '{name_or_config}' not found. Using default model.")
             return self.get_default_model()
         
-        # If it's a config dict, create a new model
+        # Если передана конфигурация, создаем модель по ней
         elif isinstance(name_or_config, dict):
             return self._create_model_from_config(name_or_config)
         
-        # Invalid input
+        # Неверный тип входных данных
         else:
             logging.error(f"Invalid model specification: {name_or_config}")
             return self.get_default_model()
@@ -96,7 +97,6 @@ class ModelRouter:
         """
         if self.default_model is None:
             self.default_model = self._create_model_from_config(self.default_model_config)
-        
         return self.default_model
     
     def select_model_for_task(self, task: str, requirements: Dict[str, Any] = None) -> BaseModel:
@@ -110,11 +110,9 @@ class ModelRouter:
         Returns:
             The selected model instance.
         """
-        # Simple implementation: just use requirements if provided
+        # Если заданы требования, создаем модель с нужной конфигурацией
         if requirements:
             return self._create_model_from_config(requirements)
-        
-        # Default to the default model
         return self.get_default_model()
     
     def _create_model_from_config(self, config: Dict[str, Any]) -> BaseModel:
@@ -127,29 +125,27 @@ class ModelRouter:
         Returns:
             A model instance.
         """
-        # Get the provider
+        # Определяем провайдера (по умолчанию openai)
         provider = config.get("provider", "openai").lower()
         
-        # Check if we have a class for this provider
+        # Если провайдер неизвестен, логируем ошибку и используем openai
         if provider not in self.model_classes:
             logging.error(f"Unknown model provider: {provider}. Using OpenAI as fallback.")
             provider = "openai"
         
+        # Дополнительная проверка для Gemini: необходим api_key
+        if provider == "gemini" and "api_key" not in config:
+            logging.error("API key must be provided for gemini provider.")
+        
         try:
-            # Get the model class
             model_class = self.model_classes[provider]
-            
-            # Extract kwargs for the model
+            # Подготовка параметров для создания модели
             kwargs = config.copy()
             kwargs.pop("provider", None)
-            
-            # Create the model
             return model_class(**kwargs)
             
         except Exception as e:
             logging.error(f"Error creating model for provider {provider}: {e}")
-            
-            # Fallback to OpenAI with minimal config
             try:
                 return OpenAIModel(model_name="gpt-4")
             except Exception:
@@ -163,8 +159,7 @@ class ModelRouter:
             A list of model information dictionaries.
         """
         models_info = []
-        
-        # Add instantiated models
+        # Добавляем зарегистрированные экземпляры моделей
         for name, model in self.models.items():
             info = {
                 "name": name,
@@ -174,13 +169,13 @@ class ModelRouter:
             }
             models_info.append(info)
         
-        # Add available providers
-        for provider in self.model_classes.keys():
+        # Добавляем доступных провайдеров, если их еще нет среди зарегистрированных моделей
+        for provider, model_class in self.model_classes.items():
             if provider not in [info["details"].get("provider") for info in models_info]:
                 models_info.append({
-                    "name": f"{provider}",
-                    "type": self.model_classes[provider].__name__,
+                    "name": provider,
+                    "type": model_class.__name__,
                     "details": {"provider": provider}
                 })
         
-        return models_info 
+        return models_info
